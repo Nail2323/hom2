@@ -2,6 +2,7 @@
 import asyncio
 from .base_tool import BaseTool
 from typing import Dict, Any, Optional
+from utils.pair_state_manager import pair_state_manager
 
 class WaitForNextCandleTool(BaseTool):
     @property
@@ -34,13 +35,11 @@ class WaitForNextCandleTool(BaseTool):
 
     async def execute(self, symbol: str, timeframe: str = "15m") -> Dict[str, Any]:
         """
-        Этот инструмент не выполняет реального действия, а просто сигнализирует,
-        что цикл анализа должен быть приостановлен.
-        Возвращаем специальный флаг, который можно проверить в run_single_analysis_cycle.
+        Этот инструмент устанавливает состояние ожидания для указанной пары.
         """
-        # Возвращаем структурированный ответ, который можно использовать в логике.
-        # Важно: этот инструмент должен быть *последним* вызванным инструментом в цикле,
-        # чтобы триггер сработал.
+        # Устанавливаем состояние ожидания для пары
+        pair_state_manager.set_pair_waiting(symbol, timeframe)
+        
         return {
             "status": "waiting_for_next_candle",
             "symbol": symbol,

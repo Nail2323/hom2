@@ -39,6 +39,10 @@ class DeepSeekClient:
         self.tool_map = {tool.name: tool for tool in self.tools}
         from utils.reasoner_context_manager import load_reasoner_context_from_file
         self.reasoner_context, _ = load_reasoner_context_from_file()
+        
+        # Импортируем менеджер состояний пар
+        from utils.pair_state_manager import pair_state_manager
+        self.pair_state_manager = pair_state_manager
         self.token_usage = {
             'total_prompt_tokens': 0,
             'total_completion_tokens': 0,
@@ -535,14 +539,19 @@ class DeepSeekClient:
         save_context_to_file(messages, iteration)
         return messages, False  # <-- Указывает, что НЕ нужно ждать
 
-    async def run_full_analysis_cycle_until_wait(self, candle_info: dict = None):
+    async def run_full_analysis_cycle_until_wait(self, symbol: str, candle_info: dict = None):
         """
         Загружает контекст, добавляет информацию о новой свече (если есть),
         запускает цикл: инструментальная модель -> рассуждающая модель,
         до тех пор, пока инструментальная модель не вызовет инструмент 'wait_for_next_candle'.
         Возвращает True, если был вызван wait_for_next_candle, иначе False.
         """
-        print(f"\n--- 🚀 Запуск ПОЛНОГО цикла анализа до команды 'ждать' ---")
+        # Проверяем, готова ли пара к анализу
+        if not self.pair_state_manager.is_pair_ready_for_analysis(symbol):
+            logger.info(f"🔄 Пара {symbol} в состоянии ожидания, пропускаем анализ")
+            return False
+
+        print(f"\n--- 🚀 Запуск ПОЛНОГО цикла анализа для пары {symbol} до команды 'ждать' ---")
         messages, iteration = load_context_from_file()
         if not messages:
             from utils.system_prompt import generate_system_prompt
@@ -554,22 +563,22 @@ class DeepSeekClient:
         else:
             # Добавляем информацию о новой свече к существующему контексту
             if candle_info:
-                candle_message = f"Закрылась новая {candle_info['interval']}-минутная свеча для {candle_info['symbol']} в {candle_info['timestamp']}."
+                candle_message = f"Закрылась новая {candle_info['interval']}-минутная свеча для {symbol} в {candle_info['timestamp']}."
                 messages.append({'role': 'user', 'content': candle_message})
             iteration += 1  # Увеличиваем номер итерации
 
         # Цикл анализа до команды 'ждать'
         while True:
             iteration += 1
-            logger.info(f"--- 🔄 Итерация полного цикла {iteration} ---")
+            logger.info(f"--- 🔄 Итерация полного цикла {iteration} для пары {symbol} ---")
             try:
                 # Сначала по циклам, потом по токенам — на всякий случай
                 messages = truncate_context_by_cycles(messages, max_cycles=8)
                 messages = truncate_context_adaptive(messages, max_tokens=900000)
                 messages = self._clean_incomplete_tool_calls(messages)
                 estimated = count_tokens_in_messages(messages)
-                logger.info(f"📊 Токены перед итерацией {iteration}: ~{estimated}")
-                print(f"\n--- 🔄 Итерация {iteration} ---")
+                logger.info(f"📊 Токены перед итерацией {iteration} для пары {symbol}: ~{estimated}")
+                print(f"\n--- 🔄 Итерация {iteration} для пары {symbol} ---")
                 print(f"[Токены: ~{estimated} / 100000]\n")
 
                 # --- ШАГ 1: вызов инструментальной модели ---
@@ -603,7 +612,7 @@ class DeepSeekClient:
                     messages.extend(tool_results)  # Результат wait_for_next_candle уже в tool_results
                     # Сохраняем контекст
                     save_context_to_file(messages, iteration)
-                    print(f"--- ✅ ПОЛНЫЙ цикл анализа завершен по команде 'ждать' ---")
+                    print(f"--- ✅ ПОЛНЫЙ цикл анализа для пары {symbol} завершен по команде 'ждать' ---")
                     return True  # <-- Указывает, что нужно ждать
 
                 # --- ШАГ 2: Подготовка данных ДЛЯ REASONER'А ---
@@ -678,7 +687,7 @@ class DeepSeekClient:
                 save_context_to_file(messages, iteration)
                 return False  # <-- Возвращаем False, так как не было команды 'ждать'
             except Exception as e:
-                logger.error(f"❌ Ошибка в итерации полного цикла {iteration}: {e}")
+                logger.error(f"❌ Ошибка в итерации полного цикла {iteration} для пары {symbol}: {e}")
                 print(f"❌ Ошибка: {e}")
                 messages = self._clean_incomplete_tool_calls(messages)
                 messages.append({
